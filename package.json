@@ -1,0 +1,20 @@
+{
+  "name": "privamargin-cre",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chainlink CRE workflow for PrivaMargin LTV monitoring and liquidation triggers",
+  "type": "module",
+  "scripts": {
+    "build": "cre workflow build",
+    "simulate": "cre workflow simulate",
+    "deploy": "cre workflow deploy",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@chainlink/cre-sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.3",
+    "vitest": "^3.0.0"
+  }
+}
