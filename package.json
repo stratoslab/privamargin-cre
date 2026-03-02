@@ -5,13 +5,14 @@
   "description": "Chainlink CRE workflow for PrivaMargin LTV monitoring and liquidation triggers",
   "type": "module",
   "scripts": {
+    "postinstall": "bun x cre-setup",
     "build": "cre workflow build",
     "simulate": "cre workflow simulate",
     "deploy": "cre workflow deploy",
     "test": "vitest"
   },
   "dependencies": {
-    "@chainlink/cre-sdk": "^0.1.0"
+    "@chainlink/cre-sdk": "^1.1.1"
   },
   "devDependencies": {
     "typescript": "~5.8.3",

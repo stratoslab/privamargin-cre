@@ -3,3 +3,7 @@ dist/
 *.wasm
 .env
 .env.local
+.env.*
+secrets.yaml
+bun.lock
+.cre_build_tmp.js

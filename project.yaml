@@ -1,0 +1,11 @@
+# CRE Project Settings for PrivaMargin LTV Monitor
+
+staging-settings:
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://api.zan.top/node/v1/eth/sepolia/4a6373aaef354ba88416fbe73cd1c616
+
+production-settings:
+  rpcs:
+    - chain-name: base-testnet-sepolia
+      url: https://api.zan.top/node/v1/base/sepolia/4a6373aaef354ba88416fbe73cd1c616

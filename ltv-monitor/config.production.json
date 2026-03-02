@@ -1,0 +1,7 @@
+{
+  "schedule": "*/5 * * * *",
+  "privamarginApiUrl": "https://privamargin.pages.dev",
+  "coingeckoApiUrl": "https://api.coingecko.com/api/v3",
+  "chainSelector": "84532",
+  "oracleContractAddress": "0x0000000000000000000000000000000000000000"
+}
