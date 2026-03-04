@@ -1,0 +1,16 @@
+name = "privamargin-ltv-prover"
+main = "src/index.ts"
+compatibility_date = "2024-05-01"
+
+[build]
+command = "npm run build"
+
+# For production, consider using Durable Objects or a Node.js service
+# since snarkjs proof generation is computationally intensive
+
+[vars]
+ENVIRONMENT = "development"
+
+# Uncomment for production deployment
+# [env.production]
+# vars = { ENVIRONMENT = "production" }

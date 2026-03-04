@@ -24,6 +24,9 @@ export interface WorkflowConfig {
 
   /** CoinGecko API base (default: https://api.coingecko.com/api/v3) */
   coingeckoApiUrl: string;
+
+  /** External prover service URL for ZK proof generation */
+  proverServiceUrl?: string;
 }
 
 // ---------------------------------------------------------------------------

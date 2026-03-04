@@ -12,9 +12,9 @@ import {
   type Runtime,
   type NodeRuntime,
 } from "@chainlink/cre-sdk";
-import type { PositionData, VaultData, BrokerFundLinkData } from "./config";
+import type { PositionData, VaultData, BrokerFundLinkData, LTVResult } from "./config";
 import { COINGECKO_IDS } from "./config";
-import { parsePrices, computeLTVs } from "./ltv";
+import { parsePrices, computeLTVs, toBps } from "./ltv";
 
 export type Config = {
   schedule: string;
@@ -23,6 +23,7 @@ export type Config = {
   chainSelector: string;
   oracleContractAddress: string;
   apiSecret?: string;
+  proverServiceUrl?: string;
 };
 
 export const onCronTrigger = (runtime: Runtime<Config>): string => {
@@ -97,6 +98,51 @@ export const onCronTrigger = (runtime: Runtime<Config>): string => {
   const healthy = ltvResults.filter((r) => !r.breached);
 
   runtime.log("LTV computed: " + healthy.length + " healthy, " + breached.length + " breached");
+
+  // Step 4: Generate ZK proofs for breached positions (if prover service configured)
+  if (config.proverServiceUrl && breached.length > 0) {
+    runtime.log("Generating ZK proofs for " + breached.length + " breached positions...");
+
+    for (const result of breached) {
+      const position = positions.find((p) => p.positionId === result.positionId);
+      if (!position) continue;
+
+      try {
+        const proofRequest = {
+          positions: [{
+            positionId: position.positionId,
+            notionalValue: position.notionalValue,
+            unrealizedPnL: position.unrealizedPnL || "0",
+            ltvThreshold: result.threshold.toString(),
+            leverageRatio: "1",
+            collateral: [
+              { asset: "CC", amount: result.collateralValue.toString() }
+            ]
+          }],
+          prices: prices,
+          computedLtvBps: toBps(result.currentLTV),
+          timestamp: Math.floor(Date.now() / 1000)
+        };
+
+        const proofResponse = http
+          .sendRequest(nodeRuntime, {
+            url: config.proverServiceUrl + "/api/prove-ltv",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(proofRequest),
+          })
+          .result();
+
+        if (proofResponse.status === 200) {
+          runtime.log("Proof generated for position " + result.positionId);
+        } else {
+          runtime.log("Proof generation failed for " + result.positionId + ": " + proofResponse.body);
+        }
+      } catch {
+        runtime.log("Prover service error for " + result.positionId);
+      }
+    }
+  }
 
   return "OK: " + positions.length + " positions, " + breached.length + " liquidations";
 };
