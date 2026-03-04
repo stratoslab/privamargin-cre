@@ -314,21 +314,46 @@ The `ltv.ts` module contains pure functions that can be imported by both the CRE
 | Latency | 30s polling | 5 min cron (configurable) |
 | Cost | Free (browser) | CRE fees + EVM gas |
 
+## Chainlink CRE Files
+
+All files that use Chainlink CRE SDK:
+
+| File | Purpose |
+|------|---------|
+| [`ltv-monitor/main.ts`](ltv-monitor/main.ts) | Main workflow - CronCapability trigger, HTTPClient for CoinGecko API |
+| [`ltv-monitor/config.ts`](ltv-monitor/config.ts) | Type definitions and constants |
+| [`ltv-monitor/ltv.ts`](ltv-monitor/ltv.ts) | Pure LTV computation logic |
+| [`ltv-monitor/workflow.yaml`](ltv-monitor/workflow.yaml) | CRE workflow configuration |
+| [`ltv-monitor/config.staging.json`](ltv-monitor/config.staging.json) | Staging environment config |
+| [`project.yaml`](project.yaml) | CRE project settings and RPC endpoints |
+
+### Key Chainlink Imports
+
+```typescript
+import {
+  CronCapability,    // Scheduled trigger
+  HTTPClient,        // External API calls (CoinGecko)
+  handler,           // Workflow handler
+  Runner,            // Workflow runner
+  type Runtime,      // Runtime context
+  type NodeRuntime,  // Node runtime for HTTP
+} from "@chainlink/cre-sdk";
+```
+
 ## Status
 
 - [x] CRE workflow compiles and simulates locally
-- [x] LTV computation logic (with mock data)
+- [x] Live CoinGecko API integration (external data source)
+- [x] LTV computation with mock positions
 - [x] ZK prover service scaffolding (Groth16)
 - [ ] CRE deployment access (pending Chainlink approval)
-- [ ] Real API integration (Canton, CoinGecko)
-- [ ] Prover service deployment
+- [ ] Canton Network API integration
 - [ ] LTVOracle contract deployment
 - [ ] End-to-end integration test
 
 ### Running Simulation
 
 ```bash
-cd ltv-monitor
 cre workflow simulate ./ltv-monitor -T staging --trigger-index 0 --non-interactive
 ```
 
@@ -336,11 +361,16 @@ Output:
 ```
 ✓ Workflow compiled
 LTV Monitor cycle starting...
-Prices: CC=0.158 ETH=3500 BTC=95000
-Positions loaded: 3
+Fetching prices from CoinGecko: https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,...
+CoinGecko response status: 200
+LIVE prices fetched successfully
+Prices: ETH=$3500 BTC=$95000 SOL=$180
+Positions loaded: 3 (mock data)
+LTV Results:
   pos-001: LTV=10.69% threshold=80% [healthy]
   pos-002: LTV=21.47% threshold=80% [healthy]
   pos-003: LTV=16.24% threshold=75% [healthy]
+Summary: 3 healthy, 0 breached
 ✓ "OK: 3 positions, 0 liquidations"
 ```
 

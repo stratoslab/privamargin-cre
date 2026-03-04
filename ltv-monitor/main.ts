@@ -2,36 +2,35 @@
  * PrivaMargin LTV Monitor - Chainlink CRE Workflow
  *
  * Decentralized, consensus-backed LTV monitoring for margin positions.
+ *
+ * This workflow:
+ * 1. Fetches LIVE prices from CoinGecko API (external data source)
+ * 2. Computes LTV for margin positions
+ * 3. Identifies positions that breach their liquidation threshold
  */
 
 import {
   CronCapability,
+  HTTPClient,
   handler,
   Runner,
   type Runtime,
+  type NodeRuntime,
 } from "@chainlink/cre-sdk";
 import type { PositionData, VaultData, BrokerFundLinkData } from "./config";
-import { FALLBACK_PRICES } from "./config";
-import { computeLTVs, toBps } from "./ltv";
+import { COINGECKO_IDS, FALLBACK_PRICES } from "./config";
+import { parsePrices, computeLTVs } from "./ltv";
 
 export type Config = {
   schedule: string;
+  coingeckoApiUrl: string;
   chainSelector: string;
   oracleContractAddress: string;
 };
 
 // =============================================================================
-// Mock Data
+// Mock Position Data (Canton Network would provide this in production)
 // =============================================================================
-
-const MOCK_PRICES: Record<string, number> = {
-  CC: 0.158,
-  ETH: 3500,
-  BTC: 95000,
-  USDC: 1.0,
-  USDT: 1.0,
-  SOL: 180,
-};
 
 const MOCK_POSITIONS: PositionData[] = [
   {
@@ -138,18 +137,60 @@ const MOCK_LINKS: Record<string, BrokerFundLinkData> = {
 // =============================================================================
 
 export const onCronTrigger = (runtime: Runtime<Config>): string => {
+  const config = runtime.config;
+  const nodeRuntime = runtime as unknown as NodeRuntime<Config>;
+
   runtime.log("LTV Monitor cycle starting...");
 
-  // Use mock data
-  const prices = { ...FALLBACK_PRICES, ...MOCK_PRICES };
+  // =========================================================================
+  // Step 1: Fetch LIVE prices from CoinGecko API (External Data Source)
+  // =========================================================================
+  const geckoIds = Object.values(COINGECKO_IDS).join(",");
+  const priceUrl = config.coingeckoApiUrl + "/simple/price?ids=" + geckoIds + "&vs_currencies=usd";
+
+  runtime.log("Fetching prices from CoinGecko: " + priceUrl);
+
+  const http = new HTTPClient();
+  let prices: Record<string, number>;
+
+  try {
+    const priceResponse = http
+      .sendRequest(nodeRuntime, {
+        url: priceUrl,
+        method: "GET",
+        headers: { Accept: "application/json" },
+      })
+      .result();
+
+    runtime.log("CoinGecko response status: " + priceResponse.status);
+
+    if (priceResponse.status === 200) {
+      const geckoData = JSON.parse(priceResponse.body) as Record<string, { usd?: number }>;
+      prices = parsePrices(geckoData);
+      runtime.log("LIVE prices fetched successfully");
+    } else {
+      prices = { ...FALLBACK_PRICES };
+      runtime.log("CoinGecko returned " + priceResponse.status + ", using fallback prices");
+    }
+  } catch (e) {
+    prices = { ...FALLBACK_PRICES };
+    runtime.log("CoinGecko fetch failed, using fallback prices");
+  }
+
+  runtime.log("Prices: ETH=$" + prices["ETH"] + " BTC=$" + prices["BTC"] + " SOL=$" + prices["SOL"]);
+
+  // =========================================================================
+  // Step 2: Load positions (mock data - Canton Network in production)
+  // =========================================================================
   const positions = MOCK_POSITIONS;
   const vaultMap = MOCK_VAULTS;
   const linkMap = MOCK_LINKS;
 
-  runtime.log("Prices: CC=" + prices["CC"] + " ETH=" + prices["ETH"] + " BTC=" + prices["BTC"]);
-  runtime.log("Positions loaded: " + positions.length);
+  runtime.log("Positions loaded: " + positions.length + " (mock data)");
 
-  // Compute LTV
+  // =========================================================================
+  // Step 3: Compute LTV for each position
+  // =========================================================================
   const ltvResults = computeLTVs(positions, vaultMap, linkMap, prices);
   const breached = ltvResults.filter((r) => r.breached);
   const healthy = ltvResults.filter((r) => !r.breached);
@@ -164,6 +205,9 @@ export const onCronTrigger = (runtime: Runtime<Config>): string => {
 
   runtime.log("Summary: " + healthy.length + " healthy, " + breached.length + " breached");
 
+  // =========================================================================
+  // Step 4: Report liquidations (on-chain write in production)
+  // =========================================================================
   if (breached.length > 0) {
     runtime.log("Liquidation required for: " + breached.map((b) => b.positionId).join(", "));
   }
