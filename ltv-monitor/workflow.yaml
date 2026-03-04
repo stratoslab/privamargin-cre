@@ -1,17 +1,15 @@
 # CRE Workflow Settings for LTV Monitor
 
-staging-settings:
+staging:
   user-workflow:
     workflow-name: "ltv-monitor-staging"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.staging.json"
-    secrets-path: "../secrets.yaml"
 
-production-settings:
+production:
   user-workflow:
     workflow-name: "ltv-monitor-production"
   workflow-artifacts:
     workflow-path: "./main.ts"
-    config-path: "./config.production.json"
-    secrets-path: "../secrets.yaml"
+    config-path: "./config.staging.json"
