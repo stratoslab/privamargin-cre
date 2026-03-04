@@ -2,7 +2,9 @@
 
 Chainlink CRE (Compute Runtime Environment) workflow for automated LTV monitoring and liquidation triggers on [PrivaMargin](https://github.com/stratoslab/privamargin) margin positions.
 
-**Live demo**: [portal.stratoslab.xyz](https://portal.stratoslab.xyz/?code=525ZVB8D)
+**Video Demo**: [https://www.youtube.com/watch?v=Q_IqZhUsV_U](https://www.youtube.com/watch?v=Q_IqZhUsV_U)
+
+**Live App**: [portal.stratoslab.xyz](https://portal.stratoslab.xyz/?code=525ZVB8D)
 
 ## Overview
 
