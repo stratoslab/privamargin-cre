@@ -4,6 +4,40 @@ Chainlink CRE (Compute Runtime Environment) workflow for automated LTV monitorin
 
 **Live demo**: [portal.stratoslab.xyz](https://portal.stratoslab.xyz/?code=525ZVB8D)
 
+## Overview
+
+This repository is part of the **PrivaMargin** ecosystem — a privacy-preserving margin trading platform built on the Canton Network. For full context on the system architecture, smart contracts, and trading workflows, see the main repository:
+
+**[github.com/stratoslab/privamargin](https://github.com/stratoslab/privamargin)**
+
+### How It Fits Together
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     PrivaMargin Ecosystem                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────────┐     ┌──────────────────┐                  │
+│  │   privamargin    │     │  privamargin-cre │ ← You are here   │
+│  │   (main repo)    │     │  (this repo)     │                  │
+│  │                  │     │                  │                  │
+│  │ • Canton Daml    │     │ • CRE Workflow   │                  │
+│  │ • Trading UI     │◄────│ • LTV Monitor    │                  │
+│  │ • Operator Dash  │     │ • ZK Proofs      │                  │
+│  │ • Cloudflare API │     │ • On-chain Oracle│                  │
+│  └──────────────────┘     └──────────────────┘                  │
+│           │                        │                             │
+│           ▼                        ▼                             │
+│  ┌──────────────────────────────────────────┐                   │
+│  │            Canton Network Ledger          │                   │
+│  │  (Positions, Vaults, Margin Calls, etc.)  │                   │
+│  └──────────────────────────────────────────┘                   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+This repo specifically handles the **decentralized LTV monitoring** component, replacing browser-based polling with a verifiable, consensus-backed workflow running on Chainlink's DON.
+
 ## Why CRE?
 
 PrivaMargin currently monitors LTV in two ways:
@@ -282,15 +316,33 @@ The `ltv.ts` module contains pure functions that can be imported by both the CRE
 
 ## Status
 
-- [x] CRE workflow code (build + simulate)
-- [x] LTVOracle Solidity contract
-- [x] LTV computation module (shared with PrivaMargin)
-- [x] PrivaMargin server-side endpoints (positions, vaults, links)
-- [x] Liquidation event listener
-- [ ] CRE Early Access approval
-- [ ] LTVOracle deployment on Base Sepolia
+- [x] CRE workflow compiles and simulates locally
+- [x] LTV computation logic (with mock data)
+- [x] ZK prover service scaffolding (Groth16)
+- [ ] CRE deployment access (pending Chainlink approval)
+- [ ] Real API integration (Canton, CoinGecko)
+- [ ] Prover service deployment
+- [ ] LTVOracle contract deployment
 - [ ] End-to-end integration test
-- [ ] CRE production deployment
+
+### Running Simulation
+
+```bash
+cd ltv-monitor
+cre workflow simulate ./ltv-monitor -T staging --trigger-index 0 --non-interactive
+```
+
+Output:
+```
+✓ Workflow compiled
+LTV Monitor cycle starting...
+Prices: CC=0.158 ETH=3500 BTC=95000
+Positions loaded: 3
+  pos-001: LTV=10.69% threshold=80% [healthy]
+  pos-002: LTV=21.47% threshold=80% [healthy]
+  pos-003: LTV=16.24% threshold=75% [healthy]
+✓ "OK: 3 positions, 0 liquidations"
+```
 
 ## Related
 
