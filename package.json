@@ -12,7 +12,8 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@chainlink/cre-sdk": "^1.1.1"
+    "@chainlink/cre-sdk": "^1.1.1",
+    "ethers": "^6.16.0"
   },
   "devDependencies": {
     "typescript": "~5.8.3",

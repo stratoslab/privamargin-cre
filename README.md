@@ -19,7 +19,20 @@ Both approaches are **centralized** — a single operator runs the check. There'
 - N independent nodes fetch prices from CoinGecko and reach **median consensus**
 - LTV computations are **deterministic** and **reproducible** across all nodes
 - Attestations are written **on-chain** — verifiable proof of price + LTV at each check
-- Liquidation triggers are **consensus-backed** — no single party can fake a breach
+- Workflow logic is **immutable** once deployed — rules cannot be secretly changed
+- Full **audit trail** — every input and computation is recorded
+
+## The Value of CRE: Verifiability
+
+The core value is **verifiable computation**, not just uptime.
+
+### Trust Model
+
+- **Canton ledger** — Immutable source of truth for positions
+- **CRE consensus** — N nodes agree on prices and LTV
+- **Audit trail** — All inputs/outputs logged, manipulation detectable
+
+If the HTTP API lies about positions, CRE logs what it received. Compare against Canton's immutable ledger → manipulation is **provably detectable**.
 
 ## Architecture
 
