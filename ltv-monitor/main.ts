@@ -191,29 +191,44 @@ export const onCronTrigger = (runtime: Runtime<Config>): string => {
   let vaultMap = MOCK_VAULTS;
   let linkMap = MOCK_LINKS;
 
-  // Production: Fetch real positions from Canton Network API
-  // try {
-  //   const posResponse = confidentialHttp
-  //     .sendRequest(nodeRuntime, {
-  //       url: config.cantonApiUrl + "/api/cre/positions",
-  //       method: "GET",
-  //       headers: {
-  //         "Content-Type": "application/json",
-  //         "X-API-Secret": "{{secrets.API_SECRET}}"  // Encrypted secret
-  //       },
-  //     })
-  //     .result();
-  //
-  //   if (posResponse.status === 200) {
-  //     const data = JSON.parse(posResponse.body);
-  //     positions = data.positions;
-  //     runtime.log("Positions fetched from Canton: " + positions.length);
-  //   }
-  // } catch (e) {
-  //   runtime.log("Canton API error, using mock data");
-  // }
+  // Fetch positions from Canton Network via PrivaMargin proxy
+  // API: https://portal.stratoslab.xyz/api/proxy/query
+  // Uses ConfidentialHTTPClient to keep API key encrypted
+  try {
+    runtime.log("Fetching positions from Canton Network...");
+    const posResponse = confidentialHttp
+      .sendRequest(nodeRuntime, {
+        url: "https://portal.stratoslab.xyz/api/proxy/query",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": "{{secrets.CANTON_API_KEY}}"  // Encrypted in CRE secrets
+        },
+        body: JSON.stringify({
+          templateId: "Position",
+          filter: {}
+        }),
+      })
+      .result();
 
-  runtime.log("Positions loaded: " + positions.length + " (mock data)");
+    runtime.log("Canton API response status: " + posResponse.status);
+
+    if (posResponse.status === 200) {
+      const data = JSON.parse(posResponse.body);
+      if (data.positions && data.positions.length > 0) {
+        positions = data.positions;
+        runtime.log("Positions fetched from Canton: " + positions.length);
+      } else {
+        runtime.log("No positions from Canton, using mock data");
+      }
+    } else {
+      runtime.log("Canton API returned " + posResponse.status + ", using mock data");
+    }
+  } catch (e) {
+    runtime.log("Canton API error, using mock data");
+  }
+
+  runtime.log("Positions loaded: " + positions.length);
 
   // =========================================================================
   // Step 3: Compute LTV for each position
