@@ -322,7 +322,7 @@ All files that use Chainlink CRE SDK:
 
 | File | Purpose |
 |------|---------|
-| [`ltv-monitor/main.ts`](ltv-monitor/main.ts) | Main workflow - CronCapability trigger, HTTPClient for CoinGecko API |
+| [`ltv-monitor/main.ts`](ltv-monitor/main.ts) | Main workflow - CronCapability, HTTPClient (CoinGecko), ConfidentialHTTPClient (Canton) |
 | [`ltv-monitor/config.ts`](ltv-monitor/config.ts) | Type definitions and constants |
 | [`ltv-monitor/ltv.ts`](ltv-monitor/ltv.ts) | Pure LTV computation logic |
 | [`ltv-monitor/workflow.yaml`](ltv-monitor/workflow.yaml) | CRE workflow configuration |
@@ -345,19 +345,65 @@ import {
 
 ### HTTP Capabilities
 
+This workflow uses both HTTP clients from the CRE SDK. See [Chainlink Confidential HTTP Docs](https://docs.chain.link/cre/capabilities/confidential-http-ts).
+
 | Capability | Use Case | Why |
 |------------|----------|-----|
 | `HTTPClient` | CoinGecko prices | Public data, N nodes fetch → median consensus |
 | `ConfidentialHTTPClient` | Canton API | API secrets stay encrypted, exactly 1 call |
 
+#### HTTPClient (Public Data)
+
+Used for fetching live cryptocurrency prices from CoinGecko. Each DON node fetches independently, and consensus is reached on the median price.
+
+```typescript
+const http = new HTTPClient();
+const priceResponse = http
+  .sendRequest(nodeRuntime, {
+    url: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum...",
+    method: "GET",
+    headers: { Accept: "application/json" },
+  })
+  .result();
+```
+
+#### ConfidentialHTTPClient (Private Data)
+
+Used for fetching position data from Canton Network via PrivaMargin's proxy API. The API key is stored in CRE's encrypted secrets vault and only decrypted inside secure enclaves.
+
+```typescript
+const confidentialHttp = new ConfidentialHTTPClient();
+const posResponse = confidentialHttp
+  .sendRequest(nodeRuntime, {
+    url: "https://portal.stratoslab.xyz/api/proxy/query",
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": "{{secrets.CANTON_API_KEY}}"  // Encrypted in CRE secrets
+    },
+    body: JSON.stringify({
+      templateId: "Position",
+      filter: {}
+    }),
+  })
+  .result();
+```
+
+**Why ConfidentialHTTPClient for Canton?**
+- API credentials never appear in workflow memory
+- Secrets are threshold-decrypted only inside secure enclaves
+- Exactly 1 API call (not N duplicates across DON nodes)
+- Position data stays confidential
+
 ## Status
 
 - [x] CRE workflow compiles and simulates locally
-- [x] Live CoinGecko API integration (external data source)
-- [x] LTV computation with mock positions
+- [x] Live CoinGecko API integration via `HTTPClient`
+- [x] Canton Network API integration via `ConfidentialHTTPClient`
+- [x] LTV computation with mock positions (fallback)
 - [x] ZK prover service scaffolding (Groth16)
 - [ ] CRE deployment access (pending Chainlink approval)
-- [ ] Canton Network API integration
+- [ ] CRE secrets vault setup (requires deployment access)
 - [ ] LTVOracle contract deployment
 - [ ] End-to-end integration test
 
@@ -375,7 +421,9 @@ Fetching prices from CoinGecko: https://api.coingecko.com/api/v3/simple/price?id
 CoinGecko response status: 200
 LIVE prices fetched successfully
 Prices: ETH=$3500 BTC=$95000 SOL=$180
-Positions loaded: 3 (mock data)
+Fetching positions from Canton Network...
+Canton API response status: 200
+Positions loaded: 3
 LTV Results:
   pos-001: LTV=10.69% threshold=80% [healthy]
   pos-002: LTV=21.47% threshold=80% [healthy]
@@ -384,9 +432,12 @@ Summary: 3 healthy, 0 breached
 ✓ "OK: 3 positions, 0 liquidations"
 ```
 
+Note: In simulation mode without secrets, Canton API falls back to mock data.
+
 ## Related
 
 - [PrivaMargin](https://github.com/stratoslab/privamargin) — Main margin trading app
 - [Chainlink CRE Docs](https://docs.chain.link/cre)
+- [CRE Confidential HTTP](https://docs.chain.link/cre/capabilities/confidential-http-ts) — Private API calls with encrypted secrets
 - [CRE Early Access](https://chain.link/cre-early-access)
 - [CRE SDK Reference](https://docs.chain.link/cre/reference/sdk/overview-ts)
