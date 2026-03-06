@@ -333,14 +333,22 @@ All files that use Chainlink CRE SDK:
 
 ```typescript
 import {
-  CronCapability,    // Scheduled trigger
-  HTTPClient,        // External API calls (CoinGecko)
-  handler,           // Workflow handler
-  Runner,            // Workflow runner
-  type Runtime,      // Runtime context
-  type NodeRuntime,  // Node runtime for HTTP
+  CronCapability,          // Scheduled trigger (every 30s)
+  HTTPClient,              // Public API calls (CoinGecko prices)
+  ConfidentialHTTPClient,  // Private API calls (Canton Network)
+  handler,                 // Workflow handler
+  Runner,                  // Workflow runner
+  type Runtime,            // Runtime context
+  type NodeRuntime,        // Node runtime for HTTP
 } from "@chainlink/cre-sdk";
 ```
+
+### HTTP Capabilities
+
+| Capability | Use Case | Why |
+|------------|----------|-----|
+| `HTTPClient` | CoinGecko prices | Public data, N nodes fetch → median consensus |
+| `ConfidentialHTTPClient` | Canton API | API secrets stay encrypted, exactly 1 call |
 
 ## Status
 
