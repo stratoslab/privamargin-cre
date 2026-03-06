@@ -390,10 +390,21 @@ const posResponse = confidentialHttp
 ```
 
 **Why ConfidentialHTTPClient for Canton?**
-- API credentials never appear in workflow memory
-- Secrets are threshold-decrypted only inside secure enclaves
-- Exactly 1 API call (not N duplicates across DON nodes)
-- Position data stays confidential
+
+PrivaMargin vault and position data is **sensitive financial information** that must be protected:
+
+| Data Protected | Why It Matters |
+|----------------|----------------|
+| Vault collateral amounts | Reveals user's holdings and net worth |
+| Position sizes & direction | Could be exploited for front-running |
+| Entry prices & PnL | Proprietary trading information |
+| LTV thresholds | Reveals liquidation vulnerability |
+
+ConfidentialHTTPClient ensures:
+- **API credentials** never appear in workflow memory
+- **Secrets** are threshold-decrypted only inside secure enclaves
+- **Exactly 1 API call** (not N duplicates across DON nodes)
+- **Response data** stays confidential — vault balances, positions, and PnL are never exposed to DON node operators
 
 ## Status
 
