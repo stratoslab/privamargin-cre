@@ -8,7 +8,7 @@
  *     1. Cron trigger → fetch live prices from CoinGecko (median consensus)
  *     2. Fetch position + vault + link data from PrivaMargin API
  *     3. Compute per-vault LTV (leverage-aware, PnL-adjusted)
- *     4. Write LTV attestations to LTVOracle EVM contract
+ *     4. Write LTV attestations to LTVOracle EVM contract via report
  *     5. If LTV >= threshold → emit LiquidationTriggered event
  *
  *   PrivaMargin server (single-execution):
@@ -16,99 +16,118 @@
  *     - Executes Canton operations: MarkMarginCalled, SeizeCollateral,
  *       LiquidatePosition, USDC settlement
  *
- * This separation ensures:
- *   - Price data is consensus-backed (N DON nodes agree on prices)
- *   - LTV computations are verifiable and tamper-proof
- *   - Canton writes happen exactly once (not N times per DON node)
- *
  * Runtime: TypeScript → WASM via Javy (QuickJS engine)
  * Constraints: No node:crypto, no async/await with SDK calls,
- *              use runtime.Now() instead of Date.now(),
+ *              use runtime.now() instead of Date.now(),
  *              use .result() blocking pattern for capabilities.
  */
 
-import { cre, type Runtime } from '@chainlink/cre-sdk';
+import {
+  cre,
+  Runner,
+  type Runtime,
+  ok,
+  text,
+  getNetwork,
+  prepareReportRequest,
+  hexToBase64,
+} from '@chainlink/cre-sdk';
+import { encodeFunctionData, type Address } from 'viem';
 import type { WorkflowConfig, PositionData, VaultData, BrokerFundLinkData } from './config';
 import { COINGECKO_IDS, LTV_ORACLE_ABI } from './config';
 import { parsePrices, computeLTVs, toBps, toUsd18 } from './ltv';
 
 // ---------------------------------------------------------------------------
-// CRE workflow definition
+// Helper: build multiHeaders for ConfidentialHTTP requests
 // ---------------------------------------------------------------------------
 
-/**
- * Cron-triggered LTV monitoring workflow.
- *
- * Runs every 5 minutes (configurable). Each execution:
- * 1. Fetches prices from CoinGecko with DON median consensus
- * 2. Fetches position/vault data from PrivaMargin server API
- * 3. Computes LTV for every open/margin-called position
- * 4. Writes attestations to LTVOracle contract
- * 5. Triggers liquidation for any breached positions
- */
+function makeHeaders(headers: Record<string, string>) {
+  const multi: Record<string, { values: string[] }> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    multi[key] = { values: [value] };
+  }
+  return multi;
+}
+
+const API_HEADERS = {
+  'Content-Type': 'application/json',
+};
+
+// ---------------------------------------------------------------------------
+// CRE workflow handler
+// ---------------------------------------------------------------------------
+
 const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
-  const config = runtime.Config();
-  const now = runtime.Now();
-  const timestamp = Math.floor(now.getTime() / 1000);
+  const config = runtime.config;
+  const now = runtime.now();
+  const timestamp = BigInt(Math.floor(now.getTime() / 1000));
 
   // ------------------------------------------------------------------
-  // Step 1: Fetch live prices via CoinGecko (DON median consensus)
+  // Step 1: Fetch live prices via CoinGecko (DON mode — public API)
   // ------------------------------------------------------------------
-  // Each DON node independently fetches from CoinGecko.
-  // ConsensusMedianAggregation ensures a single trusted price set.
 
+  const httpClient = new cre.capabilities.HTTPClient();
   const geckoIds = Object.values(COINGECKO_IDS).join(',');
   const priceUrl = `${config.coingeckoApiUrl}/simple/price?ids=${geckoIds}&vs_currencies=usd`;
 
-  const httpClient = new cre.capabilities.HTTPClient();
-  const priceResponse = httpClient.sendRequest({
-    url: priceUrl,
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-  }).result();
-
   let prices: Record<string, number>;
   try {
-    const geckoData = JSON.parse(priceResponse.body) as Record<string, { usd?: number }>;
-    prices = parsePrices(geckoData);
+    // Public API — use regular HTTPClient (no secrets needed)
+    const priceResponse = httpClient.sendRequest(
+      runtime as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      { url: priceUrl, method: 'GET', headers: { Accept: 'application/json' } },
+    ).result();
+
+    if (ok(priceResponse)) {
+      const geckoData = JSON.parse(text(priceResponse)) as Record<string, { usd?: number }>;
+      prices = parsePrices(geckoData);
+    } else {
+      prices = parsePrices({});
+      runtime.log('CoinGecko fetch failed, using fallback prices');
+    }
   } catch {
-    // If CoinGecko fails, parsePrices with empty data returns fallbacks
     prices = parsePrices({});
-    runtime.Log('warn', 'CoinGecko fetch failed, using fallback prices');
+    runtime.log('CoinGecko fetch exception, using fallback prices');
   }
 
-  runtime.Log('info', `Prices fetched: CC=$${prices['CC']} ETH=$${prices['ETH']} BTC=$${prices['BTC']}`);
+  runtime.log(`Prices: CC=$${prices['CC']} ETH=$${prices['ETH']} BTC=$${prices['BTC']}`);
 
   // ------------------------------------------------------------------
   // Step 2: Fetch position + vault + link data from PrivaMargin API
   // ------------------------------------------------------------------
-  // PrivaMargin exposes server-side endpoints that query Canton.
-  // These are deterministic — same query returns same contracts.
-  // Each DON node calls independently; consensus ensures agreement.
+  // Use ConfidentialHTTPClient to keep apiSecret secure in DON enclave.
 
-  const apiHeaders = {
-    'Content-Type': 'application/json',
+  const confidentialHttp = new cre.capabilities.ConfidentialHTTPClient();
+  const authHeaders = makeHeaders({
+    ...API_HEADERS,
     'X-API-Secret': config.apiSecret,
-  };
+  });
 
   // 2a: Open + MarginCalled positions
-  const positionsResponse = httpClient.sendRequest({
-    url: `${config.privamarginApiUrl}/api/cre/positions`,
-    method: 'GET',
-    headers: apiHeaders,
-  }).result();
-
   let positions: PositionData[];
   try {
-    const posData = JSON.parse(positionsResponse.body) as { positions: PositionData[] };
+    const posResponse = confidentialHttp.sendRequest(runtime, {
+      request: {
+        url: `${config.privamarginApiUrl}/api/cre/positions`,
+        method: 'GET',
+        multiHeaders: authHeaders,
+      },
+    }).result();
+
+    if (!ok(posResponse)) {
+      runtime.log('Positions fetch failed');
+      return 'ERROR: positions fetch failed';
+    }
+    const posData = JSON.parse(text(posResponse)) as { positions: PositionData[] };
     positions = posData.positions;
   } catch {
-    runtime.Log('error', 'Failed to parse positions response');
+    runtime.log('Positions fetch exception');
     return 'ERROR: positions fetch failed';
   }
 
   if (positions.length === 0) {
-    runtime.Log('info', 'No open positions to monitor');
+    runtime.log('No open positions to monitor');
+    notifyCycleComplete(confidentialHttp, runtime, config, now, [], prices, authHeaders);
     return 'OK: 0 positions';
   }
 
@@ -118,18 +137,22 @@ const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
 
   for (const vaultId of uniqueVaultIds) {
     try {
-      const vaultResponse = httpClient.sendRequest({
-        url: `${config.privamarginApiUrl}/api/cre/vaults?vaultId=${vaultId}`,
-        method: 'GET',
-        headers: apiHeaders,
+      const vaultResponse = confidentialHttp.sendRequest(runtime, {
+        request: {
+          url: `${config.privamarginApiUrl}/api/cre/vaults?vaultId=${vaultId}`,
+          method: 'GET',
+          multiHeaders: authHeaders,
+        },
       }).result();
 
-      const vaultData = JSON.parse(vaultResponse.body) as { vault: VaultData | null };
-      if (vaultData.vault) {
-        vaultMap[vaultId] = vaultData.vault;
+      if (ok(vaultResponse)) {
+        const vaultData = JSON.parse(text(vaultResponse)) as { vault: VaultData | null };
+        if (vaultData.vault) {
+          vaultMap[vaultId] = vaultData.vault;
+        }
       }
     } catch {
-      runtime.Log('warn', `Vault ${vaultId} fetch failed`);
+      runtime.log(`Vault ${vaultId} fetch failed`);
     }
   }
 
@@ -140,22 +163,26 @@ const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
   for (const pair of brokerFundPairs) {
     try {
       const [broker, fund] = pair.split('|');
-      const linkResponse = httpClient.sendRequest({
-        url: `${config.privamarginApiUrl}/api/cre/links?broker=${encodeURIComponent(broker)}&fund=${encodeURIComponent(fund)}`,
-        method: 'GET',
-        headers: apiHeaders,
+      const linkResponse = confidentialHttp.sendRequest(runtime, {
+        request: {
+          url: `${config.privamarginApiUrl}/api/cre/links?broker=${encodeURIComponent(broker)}&fund=${encodeURIComponent(fund)}`,
+          method: 'GET',
+          multiHeaders: authHeaders,
+        },
       }).result();
 
-      const linkData = JSON.parse(linkResponse.body) as { link: BrokerFundLinkData | null };
-      if (linkData.link) {
-        linkMap[pair] = linkData.link;
+      if (ok(linkResponse)) {
+        const linkData = JSON.parse(text(linkResponse)) as { link: BrokerFundLinkData | null };
+        if (linkData.link) {
+          linkMap[pair] = linkData.link;
+        }
       }
     } catch {
-      runtime.Log('warn', `Link ${pair} fetch failed`);
+      runtime.log(`Link ${pair} fetch failed`);
     }
   }
 
-  runtime.Log('info', `Data loaded: ${positions.length} positions, ${Object.keys(vaultMap).length} vaults, ${Object.keys(linkMap).length} links`);
+  runtime.log(`Data: ${positions.length} positions, ${Object.keys(vaultMap).length} vaults, ${Object.keys(linkMap).length} links`);
 
   // ------------------------------------------------------------------
   // Step 3: Compute LTV for all positions
@@ -166,34 +193,50 @@ const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
   const breached = ltvResults.filter(r => r.breached);
   const healthy = ltvResults.filter(r => !r.breached);
 
-  runtime.Log('info', `LTV computed: ${healthy.length} healthy, ${breached.length} breached`);
+  runtime.log(`LTV: ${healthy.length} healthy, ${breached.length} breached`);
 
   // ------------------------------------------------------------------
   // Step 4: Write LTV attestations to LTVOracle EVM contract
   // ------------------------------------------------------------------
-  // Every position gets an on-chain attestation — verifiable proof that
-  // the CRE DON computed this LTV at this time with consensus prices.
+  // Every position gets an on-chain attestation via report + writeReport.
+  // The CRE KeystoneForwarder delivers the report to the contract.
 
-  const evmClient = new cre.capabilities.EVMClient(config.chainSelector);
+  const network = getNetwork({
+    chainFamily: 'evm',
+    chainSelectorName: config.chainSelectorName,
+    isTestnet: true,
+  });
+  if (!network) {
+    runtime.log(`Network not found: ${config.chainSelectorName}`);
+    return 'ERROR: network not found';
+  }
+
+  const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
+  const oracleAddress = config.oracleContractAddress as Address;
 
   for (const result of ltvResults) {
     try {
-      evmClient.write({
-        contractAddress: config.oracleContractAddress,
+      const callData = encodeFunctionData({
         abi: LTV_ORACLE_ABI,
-        method: 'attestLTV',
+        functionName: 'attestLTV',
         args: [
           result.positionId,
           result.vaultId,
-          toBps(result.currentLTV),           // LTV in basis points
-          toUsd18(result.collateralValue).toString(), // collateral in 18-dec USD
-          toUsd18(result.notional).toString(),        // notional in 18-dec USD
-          toUsd18(result.pnl).toString(),             // PnL in 18-dec USD
+          BigInt(toBps(result.currentLTV)),
+          toUsd18(result.collateralValue),
+          toUsd18(result.notional),
+          toUsd18(result.pnl),
           timestamp,
         ],
+      });
+
+      const report = runtime.report(prepareReportRequest(callData)).result();
+      evmClient.writeReport(runtime, {
+        receiver: hexToBase64(oracleAddress),
+        report,
       }).result();
     } catch {
-      runtime.Log('warn', `attestLTV failed for ${result.positionId}`);
+      runtime.log(`attestLTV failed: ${result.positionId}`);
     }
   }
 
@@ -205,69 +248,102 @@ const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
 
   for (const result of breached) {
     try {
-      evmClient.write({
-        contractAddress: config.oracleContractAddress,
+      const callData = encodeFunctionData({
         abi: LTV_ORACLE_ABI,
-        method: 'triggerLiquidation',
+        functionName: 'triggerLiquidation',
         args: [
           result.positionId,
           result.vaultId,
           result.broker,
           result.fund,
-          toBps(result.currentLTV),    // current LTV in bps
-          toBps(result.threshold),     // threshold in bps
+          BigInt(toBps(result.currentLTV)),
+          BigInt(toBps(result.threshold)),
           timestamp,
         ],
+      });
+
+      const report = runtime.report(prepareReportRequest(callData)).result();
+      evmClient.writeReport(runtime, {
+        receiver: hexToBase64(oracleAddress),
+        report,
       }).result();
 
-      runtime.Log('info', `Liquidation triggered: ${result.positionId} LTV=${(result.currentLTV * 100).toFixed(1)}% >= ${(result.threshold * 100).toFixed(0)}%`);
+      runtime.log(`Liquidation: ${result.positionId} LTV=${(result.currentLTV * 100).toFixed(1)}%`);
     } catch {
-      runtime.Log('error', `triggerLiquidation failed for ${result.positionId}`);
+      runtime.log(`triggerLiquidation failed: ${result.positionId}`);
     }
   }
 
   // ------------------------------------------------------------------
-  // Step 6: Notify PrivaMargin API of completed cycle (fire-and-forget)
+  // Step 6: Notify PrivaMargin API of completed cycle
   // ------------------------------------------------------------------
-  // Persists run record for operator dashboard visibility.
 
-  try {
-    httpClient.sendRequest({
-      url: `${config.privamarginApiUrl}/api/cre/cycle-complete`,
-      method: 'POST',
-      headers: apiHeaders,
-      body: JSON.stringify({
-        timestamp: new Date(now).toISOString(),
-        processed: positions.length,
-        breached: breached.length,
-        healthy: healthy.length,
-        prices: {
-          CC: prices['CC'] || 0,
-          ETH: prices['ETH'] || 0,
-          BTC: prices['BTC'] || 0,
-          USDC: prices['USDC'] || 0,
-          SOL: prices['SOL'] || 0,
-        },
-        results: ltvResults.map(r => ({
-          positionId: r.positionId,
-          vaultId: r.vaultId,
-          currentLTV: r.currentLTV,
-          breached: r.breached,
-        })),
-      }),
-    }).result();
-  } catch {
-    runtime.Log('warn', 'cycle-complete notification failed (non-fatal)');
-  }
+  notifyCycleComplete(confidentialHttp, runtime, config, now, ltvResults, prices, authHeaders);
 
-  return `OK: ${positions.length} positions, ${breached.length} liquidations triggered`;
+  return `OK: ${positions.length} positions, ${breached.length} liquidations`;
 };
 
 // ---------------------------------------------------------------------------
-// Export workflow with cron trigger
+// Helper: POST cycle-complete to PrivaMargin
 // ---------------------------------------------------------------------------
 
-export default cre.createWorkflow({
-  trigger: cre.triggers.cron('*/5 * * * *'), // Every 5 minutes
-  callback: onCronTrigger,
+type ConfidentialHTTPClientType = InstanceType<typeof cre.capabilities.ConfidentialHTTPClient>;
+type HeadersMap = Record<string, { values: string[] }>;
+
+function notifyCycleComplete(
+  httpClient: ConfidentialHTTPClientType,
+  runtime: Runtime<WorkflowConfig>,
+  config: WorkflowConfig,
+  now: Date,
+  ltvResults: Array<{ positionId: string; vaultId: string; currentLTV: number; breached: boolean }>,
+  prices: Record<string, number>,
+  authHeaders: HeadersMap,
+): void {
+  try {
+    httpClient.sendRequest(runtime, {
+      request: {
+        url: `${config.privamarginApiUrl}/api/cre/cycle-complete`,
+        method: 'POST',
+        multiHeaders: authHeaders,
+        bodyString: JSON.stringify({
+          timestamp: now.toISOString(),
+          processed: ltvResults.length,
+          breached: ltvResults.filter(r => r.breached).length,
+          healthy: ltvResults.filter(r => !r.breached).length,
+          prices: {
+            CC: prices['CC'] || 0,
+            ETH: prices['ETH'] || 0,
+            BTC: prices['BTC'] || 0,
+            USDC: prices['USDC'] || 0,
+            SOL: prices['SOL'] || 0,
+          },
+          results: ltvResults.map(r => ({
+            positionId: r.positionId,
+            vaultId: r.vaultId,
+            currentLTV: r.currentLTV,
+            breached: r.breached,
+          })),
+        }),
+      },
+    }).result();
+  } catch {
+    runtime.log('cycle-complete notification failed (non-fatal)');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workflow registration via Runner + cre.handler
+// ---------------------------------------------------------------------------
+
+const cronTrigger = new cre.capabilities.CronCapability().trigger({
+  schedule: '0 */5 * * * *', // Every 5 minutes
 });
+
+const workflow = [cre.handler(cronTrigger, onCronTrigger)];
+
+export async function main() {
+  const runner = await Runner.newRunner<WorkflowConfig>();
+  await runner.run(() => workflow);
+}
+
+main();

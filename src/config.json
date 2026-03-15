@@ -1,0 +1,7 @@
+{
+  "privamarginApiUrl": "https://privamargin.stratos-lab.com",
+  "apiSecret": "${secrets.API_SECRET}",
+  "chainSelectorName": "ethereum-testnet-sepolia-base-1",
+  "oracleContractAddress": "0x0000000000000000000000000000000000000000",
+  "coingeckoApiUrl": "https://api.coingecko.com/api/v3"
+}

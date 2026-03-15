@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.wasm
+src/workflow.js
 .env
 .env.local
 .env.*

@@ -6,18 +6,18 @@
  */
 
 // ---------------------------------------------------------------------------
-// Workflow configuration — injected via CRE secrets / env
+// Workflow configuration — loaded from config.json, secrets via CRE CLI
 // ---------------------------------------------------------------------------
 
 export interface WorkflowConfig {
-  /** PrivaMargin API base URL (Cloudflare Pages deployment) */
+  /** PrivaMargin API base URL (Cloudflare Worker deployment) */
   privamarginApiUrl: string;
 
   /** API secret for authenticated PrivaMargin endpoints */
   apiSecret: string;
 
-  /** EVM chain selector for LTVOracle contract writes */
-  chainSelector: string;
+  /** EVM chain selector name (e.g. 'ethereum-testnet-sepolia-base-1') */
+  chainSelectorName: string;
 
   /** LTVOracle contract address on target EVM chain */
   oracleContractAddress: string;
@@ -89,19 +89,64 @@ export interface LTVResult {
 }
 
 // ---------------------------------------------------------------------------
-// LTVOracle contract ABI (Solidity events + functions)
+// LTVOracle contract ABI (viem format for encodeFunctionData)
 // ---------------------------------------------------------------------------
 
 export const LTV_ORACLE_ABI = [
-  // Write: record an LTV attestation (called every cycle for all positions)
-  'function attestLTV(string positionId, string vaultId, uint256 ltvBps, uint256 collateralUsd18, uint256 notionalUsd18, uint256 pnlUsd18, uint256 timestamp)',
-
-  // Write: emit a liquidation trigger (called when LTV >= threshold)
-  'function triggerLiquidation(string positionId, string vaultId, string broker, string fund, uint256 ltvBps, uint256 thresholdBps, uint256 timestamp)',
-
-  // Events (PrivaMargin listener watches these)
-  'event LTVAttested(string indexed positionId, string vaultId, uint256 ltvBps, uint256 collateralUsd18, uint256 timestamp)',
-  'event LiquidationTriggered(string indexed positionId, string vaultId, string broker, string fund, uint256 ltvBps, uint256 thresholdBps, uint256 timestamp)',
+  {
+    name: 'attestLTV',
+    type: 'function' as const,
+    stateMutability: 'nonpayable' as const,
+    inputs: [
+      { name: 'positionId', type: 'string' },
+      { name: 'vaultId', type: 'string' },
+      { name: 'ltvBps', type: 'uint256' },
+      { name: 'collateralUsd18', type: 'uint256' },
+      { name: 'notionalUsd18', type: 'uint256' },
+      { name: 'pnlUsd18', type: 'uint256' },
+      { name: 'timestamp', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    name: 'triggerLiquidation',
+    type: 'function' as const,
+    stateMutability: 'nonpayable' as const,
+    inputs: [
+      { name: 'positionId', type: 'string' },
+      { name: 'vaultId', type: 'string' },
+      { name: 'broker', type: 'string' },
+      { name: 'fund', type: 'string' },
+      { name: 'ltvBps', type: 'uint256' },
+      { name: 'thresholdBps', type: 'uint256' },
+      { name: 'timestamp', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    name: 'LTVAttested',
+    type: 'event' as const,
+    inputs: [
+      { name: 'positionId', type: 'string', indexed: true },
+      { name: 'vaultId', type: 'string', indexed: false },
+      { name: 'ltvBps', type: 'uint256', indexed: false },
+      { name: 'collateralUsd18', type: 'uint256', indexed: false },
+      { name: 'timestamp', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    name: 'LiquidationTriggered',
+    type: 'event' as const,
+    inputs: [
+      { name: 'positionId', type: 'string', indexed: true },
+      { name: 'vaultId', type: 'string', indexed: false },
+      { name: 'broker', type: 'string', indexed: false },
+      { name: 'fund', type: 'string', indexed: false },
+      { name: 'ltvBps', type: 'uint256', indexed: false },
+      { name: 'thresholdBps', type: 'uint256', indexed: false },
+      { name: 'timestamp', type: 'uint256', indexed: false },
+    ],
+  },
 ] as const;
 
 // ---------------------------------------------------------------------------
