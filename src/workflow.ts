@@ -91,11 +91,22 @@ const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
   // Step 2: Fetch position + vault + link data from PrivaMargin API
   // ------------------------------------------------------------------
   // Use ConfidentialHTTPClient to keep apiSecret secure in DON enclave.
+  // Fetch secret from vault rather than relying on config string substitution.
 
   const confidentialHttp = new cre.capabilities.ConfidentialHTTPClient();
+
+  let apiSecret: string;
+  try {
+    const secret = runtime.getSecret({ id: 'API_SECRET' }).result();
+    apiSecret = secret.value;
+  } catch {
+    runtime.log('Failed to fetch API_SECRET from vault');
+    return 'ERROR: secret fetch failed';
+  }
+
   const authHeaders = makeHeaders({
     ...API_HEADERS,
-    'X-API-Secret': config.apiSecret,
+    'X-API-Secret': apiSecret,
   });
 
   // 2a: Open + MarginCalled positions
