@@ -3,18 +3,18 @@
  *
  * Decentralized, consensus-backed LTV monitoring for Canton margin positions.
  *
- * Architecture (hybrid model):
+ * Architecture:
  *   CRE (decentralized DON):
  *     1. Cron trigger → fetch live prices from CoinGecko (median consensus)
  *     2. Fetch position + vault + link data from PrivaMargin API
  *     3. Compute per-vault LTV (leverage-aware, PnL-adjusted)
- *     4. Write LTV attestations to LTVOracle EVM contract via report
- *     5. If LTV >= threshold → emit LiquidationTriggered event
+ *     4. POST full LTV results back to PrivaMargin API
  *
  *   PrivaMargin server (single-execution):
- *     - Watches LiquidationTriggered events on LTVOracle
- *     - Executes Canton operations: MarkMarginCalled, SeizeCollateral,
- *       LiquidatePosition, USDC settlement
+ *     - Receives consensus-backed LTV results from CRE
+ *     - Writes tamper-proof attestations to Canton (private to parties)
+ *     - If LTV >= threshold → executes Canton operations:
+ *       MarkMarginCalled, SeizeCollateral, LiquidatePosition, USDC settlement
  *
  * Runtime: TypeScript → WASM via Javy (QuickJS engine)
  * Constraints: No node:crypto, no async/await with SDK calls,
@@ -28,14 +28,10 @@ import {
   type Runtime,
   ok,
   text,
-  getNetwork,
-  prepareReportRequest,
-  hexToBase64,
 } from '@chainlink/cre-sdk';
-import { encodeFunctionData, type Address } from 'viem';
-import type { WorkflowConfig, PositionData, VaultData, BrokerFundLinkData } from './config';
-import { COINGECKO_IDS, LTV_ORACLE_ABI } from './config';
-import { parsePrices, computeLTVs, toBps, toUsd18 } from './ltv';
+import type { WorkflowConfig, PositionData, VaultData, BrokerFundLinkData, LTVResult } from './config';
+import { COINGECKO_IDS } from './config';
+import { parsePrices, computeLTVs } from './ltv';
 
 // ---------------------------------------------------------------------------
 // Helper: build multiHeaders for ConfidentialHTTP requests
@@ -60,7 +56,6 @@ const API_HEADERS = {
 const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
   const config = runtime.config;
   const now = runtime.now();
-  const timestamp = BigInt(Math.floor(now.getTime() / 1000));
 
   // ------------------------------------------------------------------
   // Step 1: Fetch live prices via CoinGecko (DON mode — public API)
@@ -196,87 +191,14 @@ const onCronTrigger = (runtime: Runtime<WorkflowConfig>): string => {
   runtime.log(`LTV: ${healthy.length} healthy, ${breached.length} breached`);
 
   // ------------------------------------------------------------------
-  // Step 4: Write LTV attestations to LTVOracle EVM contract
+  // Step 4: Post LTV results to PrivaMargin API
   // ------------------------------------------------------------------
-  // Every position gets an on-chain attestation via report + writeReport.
-  // The CRE KeystoneForwarder delivers the report to the contract.
-
-  const network = getNetwork({
-    chainFamily: 'evm',
-    chainSelectorName: config.chainSelectorName,
-    isTestnet: true,
-  });
-  if (!network) {
-    runtime.log(`Network not found: ${config.chainSelectorName}`);
-    return 'ERROR: network not found';
-  }
-
-  const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
-  const oracleAddress = config.oracleContractAddress as Address;
-
-  for (const result of ltvResults) {
-    try {
-      const callData = encodeFunctionData({
-        abi: LTV_ORACLE_ABI,
-        functionName: 'attestLTV',
-        args: [
-          result.positionId,
-          result.vaultId,
-          BigInt(toBps(result.currentLTV)),
-          toUsd18(result.collateralValue),
-          toUsd18(result.notional),
-          toUsd18(result.pnl),
-          timestamp,
-        ],
-      });
-
-      const report = runtime.report(prepareReportRequest(callData)).result();
-      evmClient.writeReport(runtime, {
-        receiver: hexToBase64(oracleAddress),
-        report,
-      }).result();
-    } catch {
-      runtime.log(`attestLTV failed: ${result.positionId}`);
-    }
-  }
-
-  // ------------------------------------------------------------------
-  // Step 5: Trigger liquidation for breached positions
-  // ------------------------------------------------------------------
-  // LTVOracle emits LiquidationTriggered — PrivaMargin listener picks
-  // this up and executes Canton operations (single execution, not N).
+  // PrivaMargin writes attestations to Canton (tamper-proof + private).
+  // Breached positions trigger Canton liquidation operations directly.
 
   for (const result of breached) {
-    try {
-      const callData = encodeFunctionData({
-        abi: LTV_ORACLE_ABI,
-        functionName: 'triggerLiquidation',
-        args: [
-          result.positionId,
-          result.vaultId,
-          result.broker,
-          result.fund,
-          BigInt(toBps(result.currentLTV)),
-          BigInt(toBps(result.threshold)),
-          timestamp,
-        ],
-      });
-
-      const report = runtime.report(prepareReportRequest(callData)).result();
-      evmClient.writeReport(runtime, {
-        receiver: hexToBase64(oracleAddress),
-        report,
-      }).result();
-
-      runtime.log(`Liquidation: ${result.positionId} LTV=${(result.currentLTV * 100).toFixed(1)}%`);
-    } catch {
-      runtime.log(`triggerLiquidation failed: ${result.positionId}`);
-    }
+    runtime.log(`Liquidation: ${result.positionId} LTV=${(result.currentLTV * 100).toFixed(1)}%`);
   }
-
-  // ------------------------------------------------------------------
-  // Step 6: Notify PrivaMargin API of completed cycle
-  // ------------------------------------------------------------------
 
   notifyCycleComplete(confidentialHttp, runtime, config, now, ltvResults, prices, authHeaders);
 
@@ -295,7 +217,7 @@ function notifyCycleComplete(
   runtime: Runtime<WorkflowConfig>,
   config: WorkflowConfig,
   now: Date,
-  ltvResults: Array<{ positionId: string; vaultId: string; currentLTV: number; breached: boolean }>,
+  ltvResults: LTVResult[],
   prices: Record<string, number>,
   authHeaders: HeadersMap,
 ): void {
@@ -320,8 +242,15 @@ function notifyCycleComplete(
           results: ltvResults.map(r => ({
             positionId: r.positionId,
             vaultId: r.vaultId,
+            fund: r.fund,
+            broker: r.broker,
+            notional: r.notional,
+            collateralValue: r.collateralValue,
+            pnl: r.pnl,
             currentLTV: r.currentLTV,
+            threshold: r.threshold,
             breached: r.breached,
+            status: r.status,
           })),
         }),
       },

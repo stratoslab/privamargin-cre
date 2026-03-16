@@ -16,12 +16,6 @@ export interface WorkflowConfig {
   /** API secret for authenticated PrivaMargin endpoints */
   apiSecret: string;
 
-  /** EVM chain selector name (e.g. 'ethereum-testnet-sepolia-base-1') */
-  chainSelectorName: string;
-
-  /** LTVOracle contract address on target EVM chain */
-  oracleContractAddress: string;
-
   /** CoinGecko API base (default: https://api.coingecko.com/api/v3) */
   coingeckoApiUrl: string;
 }
@@ -87,67 +81,6 @@ export interface LTVResult {
   breached: boolean;
   status: string;
 }
-
-// ---------------------------------------------------------------------------
-// LTVOracle contract ABI (viem format for encodeFunctionData)
-// ---------------------------------------------------------------------------
-
-export const LTV_ORACLE_ABI = [
-  {
-    name: 'attestLTV',
-    type: 'function' as const,
-    stateMutability: 'nonpayable' as const,
-    inputs: [
-      { name: 'positionId', type: 'string' },
-      { name: 'vaultId', type: 'string' },
-      { name: 'ltvBps', type: 'uint256' },
-      { name: 'collateralUsd18', type: 'uint256' },
-      { name: 'notionalUsd18', type: 'uint256' },
-      { name: 'pnlUsd18', type: 'uint256' },
-      { name: 'timestamp', type: 'uint256' },
-    ],
-    outputs: [],
-  },
-  {
-    name: 'triggerLiquidation',
-    type: 'function' as const,
-    stateMutability: 'nonpayable' as const,
-    inputs: [
-      { name: 'positionId', type: 'string' },
-      { name: 'vaultId', type: 'string' },
-      { name: 'broker', type: 'string' },
-      { name: 'fund', type: 'string' },
-      { name: 'ltvBps', type: 'uint256' },
-      { name: 'thresholdBps', type: 'uint256' },
-      { name: 'timestamp', type: 'uint256' },
-    ],
-    outputs: [],
-  },
-  {
-    name: 'LTVAttested',
-    type: 'event' as const,
-    inputs: [
-      { name: 'positionId', type: 'string', indexed: true },
-      { name: 'vaultId', type: 'string', indexed: false },
-      { name: 'ltvBps', type: 'uint256', indexed: false },
-      { name: 'collateralUsd18', type: 'uint256', indexed: false },
-      { name: 'timestamp', type: 'uint256', indexed: false },
-    ],
-  },
-  {
-    name: 'LiquidationTriggered',
-    type: 'event' as const,
-    inputs: [
-      { name: 'positionId', type: 'string', indexed: true },
-      { name: 'vaultId', type: 'string', indexed: false },
-      { name: 'broker', type: 'string', indexed: false },
-      { name: 'fund', type: 'string', indexed: false },
-      { name: 'ltvBps', type: 'uint256', indexed: false },
-      { name: 'thresholdBps', type: 'uint256', indexed: false },
-      { name: 'timestamp', type: 'uint256', indexed: false },
-    ],
-  },
-] as const;
 
 // ---------------------------------------------------------------------------
 // Price feed constants

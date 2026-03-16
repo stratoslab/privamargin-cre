@@ -1,0 +1,15 @@
+# CRE Workflow Settings for PrivaMargin LTV Monitor
+
+staging:
+  user-workflow:
+    workflow-name: "ltv-monitor-staging"
+  workflow-artifacts:
+    workflow-path: "./src/workflow.ts"
+    config-path: "./src/config.json"
+
+production:
+  user-workflow:
+    workflow-name: "ltv-monitor-production"
+  workflow-artifacts:
+    workflow-path: "./src/workflow.ts"
+    config-path: "./src/config.json"

@@ -186,18 +186,3 @@ export function computeLTVs(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Helpers for EVM contract encoding
-// ---------------------------------------------------------------------------
-
-/** Convert a decimal (e.g. 0.85) to basis points (8500). */
-export function toBps(value: number): number {
-  return Math.round(value * 10000);
-}
-
-/** Convert USD amount to 18-decimal fixed point for Solidity uint256. */
-export function toUsd18(value: number): bigint {
-  // Truncate to 6 decimal places to avoid floating point noise
-  const truncated = Math.round(value * 1e6) / 1e6;
-  return BigInt(Math.round(truncated * 1e18));
-}
